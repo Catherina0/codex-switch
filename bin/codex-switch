@@ -1,0 +1,517 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly PROGRAM_NAME="codex-switch"
+readonly VERSION="0.1.0"
+
+CODEX_HOME="${CODEX_HOME:-"$HOME/.codex"}"
+FORCE=0
+QUIET=0
+
+usage() {
+  cat <<'USAGE'
+codex-switch - switch Codex between API and OAI subscription auth files
+
+Usage:
+  codex-switch [global options] status
+  codex-switch [global options] init [api|oai] [--force]
+  codex-switch [global options] switch api|oai
+  codex-switch [global options] api
+  codex-switch [global options] oai
+  codex-switch [global options] doctor
+
+Global options:
+  --codex-home DIR   Codex config directory. Defaults to $CODEX_HOME or ~/.codex
+  --force            Overwrite existing saved mode files during init
+  --quiet            Print less output
+  -h, --help         Show help
+  -v, --version      Show version
+
+Saved files:
+  API mode:          config.toml.api + auth.json.api
+  OAI mode:          config.toml.oai + auth.json.oai
+  Compatibility:     config.toml.openai + auth.json.openai is also supported
+
+Examples:
+  codex-switch init
+  codex-switch api
+  codex-switch oai
+  codex-switch --codex-home /tmp/codex-home status
+USAGE
+}
+
+say() {
+  if [[ "$QUIET" -eq 0 ]]; then
+    printf '%s\n' "$*"
+  fi
+}
+
+warn() {
+  printf '%s: %s\n' "$PROGRAM_NAME" "$*" >&2
+}
+
+die() {
+  warn "$*"
+  exit 1
+}
+
+expand_path() {
+  local path="$1"
+
+  case "$path" in
+    "~") printf '%s\n' "$HOME" ;;
+    "~/"*) printf '%s/%s\n' "$HOME" "${path#~/}" ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
+config_file() {
+  printf '%s/config.toml\n' "$CODEX_HOME"
+}
+
+auth_file() {
+  printf '%s/auth.json\n' "$CODEX_HOME"
+}
+
+normalize_mode() {
+  case "${1:-}" in
+    api | apikey | key)
+      printf 'api\n'
+      ;;
+    oai | openai | gpt | plus | chatgpt | subscription | sub)
+      printf 'oai\n'
+      ;;
+    "")
+      return 1
+      ;;
+    *)
+      die "unknown mode '$1' (use api or oai)"
+      ;;
+  esac
+}
+
+preferred_suffix() {
+  local mode="$1"
+  local raw="${2:-}"
+
+  case "$mode:$raw" in
+    api:*) printf 'api\n' ;;
+    oai:*) printf 'oai\n' ;;
+    *) die "unknown mode '$mode'" ;;
+  esac
+}
+
+suffixes_for_mode() {
+  case "$1" in
+    api)
+      printf 'api\n'
+      ;;
+    oai)
+      printf 'oai\n'
+      printf 'openai\n'
+      ;;
+    *)
+      die "unknown mode '$1'"
+      ;;
+  esac
+}
+
+suffix_to_mode() {
+  case "$1" in
+    api) printf 'api\n' ;;
+    oai | openai) printf 'oai\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+find_variant() {
+  local base_file="$1"
+  local mode="$2"
+  local suffix
+
+  while IFS= read -r suffix; do
+    if [[ -f "$base_file.$suffix" ]]; then
+      printf '%s.%s\n' "$base_file" "$suffix"
+      return 0
+    fi
+  done < <(suffixes_for_mode "$mode")
+
+  return 1
+}
+
+file_state() {
+  local path="$1"
+
+  if [[ -f "$path" ]]; then
+    printf 'present'
+  else
+    printf 'missing'
+  fi
+}
+
+active_mode() {
+  local config auth suffix config_variant auth_variant
+
+  config="$(config_file)"
+  auth="$(auth_file)"
+
+  for suffix in api oai openai; do
+    config_variant="$config.$suffix"
+    auth_variant="$auth.$suffix"
+    if [[ -f "$config" && -f "$auth" && -f "$config_variant" && -f "$auth_variant" ]] &&
+      cmp -s "$config" "$config_variant" &&
+      cmp -s "$auth" "$auth_variant"; then
+      printf '%s (%s)\n' "$(suffix_to_mode "$suffix")" "$suffix"
+      return 0
+    fi
+  done
+
+  printf 'unknown\n'
+}
+
+print_variant_state() {
+  local mode="$1"
+  local config auth config_variant auth_variant
+
+  config="$(config_file)"
+  auth="$(auth_file)"
+
+  if config_variant="$(find_variant "$config" "$mode" 2>/dev/null)"; then
+    printf '  %-6s config: %s\n' "$mode" "$config_variant"
+  else
+    printf '  %-6s config: missing\n' "$mode"
+  fi
+
+  if auth_variant="$(find_variant "$auth" "$mode" 2>/dev/null)"; then
+    printf '  %-6s auth:   %s\n' "$mode" "$auth_variant"
+  else
+    printf '  %-6s auth:   missing\n' "$mode"
+  fi
+}
+
+status_command() {
+  printf 'Codex home: %s\n' "$CODEX_HOME"
+  printf 'Active mode: %s\n' "$(active_mode)"
+  printf '\nActive files:\n'
+  printf '  config: %s (%s)\n' "$(config_file)" "$(file_state "$(config_file)")"
+  printf '  auth:   %s (%s)\n' "$(auth_file)" "$(file_state "$(auth_file)")"
+  printf '\nSaved modes:\n'
+  print_variant_state api
+  print_variant_state oai
+}
+
+doctor_command() {
+  local config auth ok=0
+  config="$(config_file)"
+  auth="$(auth_file)"
+
+  [[ -d "$CODEX_HOME" ]] || {
+    warn "Codex home is missing: $CODEX_HOME"
+    ok=1
+  }
+
+  [[ -f "$config" ]] || {
+    warn "active config is missing: $config"
+    ok=1
+  }
+
+  [[ -f "$auth" ]] || {
+    warn "active auth is missing: $auth"
+    ok=1
+  }
+
+  for mode in api oai; do
+    find_variant "$config" "$mode" >/dev/null 2>&1 || {
+      warn "saved config for $mode mode is missing"
+      ok=1
+    }
+    find_variant "$auth" "$mode" >/dev/null 2>&1 || {
+      warn "saved auth for $mode mode is missing"
+      ok=1
+    }
+  done
+
+  if [[ "$ok" -eq 0 ]]; then
+    say "Everything looks ready."
+  else
+    warn "Run '$PROGRAM_NAME init' after logging in with the mode you want to save."
+  fi
+
+  return "$ok"
+}
+
+backup_active_files() {
+  local target_mode="$1"
+  local stamp config auth
+
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  config="$(config_file)"
+  auth="$(auth_file)"
+
+  if [[ -f "$config" ]]; then
+    cp -p "$config" "$(unique_path "$config.backup-$stamp-before-$target_mode")"
+  fi
+
+  if [[ -f "$auth" ]]; then
+    cp -p "$auth" "$(unique_path "$auth.backup-$stamp-before-$target_mode")"
+  fi
+}
+
+unique_path() {
+  local base_path="$1"
+  local candidate="$base_path"
+  local index=1
+
+  while [[ -e "$candidate" ]]; do
+    candidate="$base_path.$index"
+    index=$((index + 1))
+  done
+
+  printf '%s\n' "$candidate"
+}
+
+atomic_copy() {
+  local source_file="$1"
+  local target_file="$2"
+  local tmp_file
+
+  tmp_file="$target_file.tmp.$$"
+  cp -p "$source_file" "$tmp_file"
+  mv "$tmp_file" "$target_file"
+}
+
+switch_command() {
+  local raw_mode="${1:-}"
+  local mode config auth config_variant auth_variant
+
+  mode="$(normalize_mode "$raw_mode")" || die "switch needs a mode: api or oai"
+  config="$(config_file)"
+  auth="$(auth_file)"
+
+  [[ -d "$CODEX_HOME" ]] || die "Codex home does not exist: $CODEX_HOME"
+
+  config_variant="$(find_variant "$config" "$mode")" ||
+    die "missing saved config for $mode mode under $CODEX_HOME"
+  auth_variant="$(find_variant "$auth" "$mode")" ||
+    die "missing saved auth for $mode mode under $CODEX_HOME"
+
+  if [[ -f "$config" && -f "$auth" ]] &&
+    cmp -s "$config" "$config_variant" &&
+    cmp -s "$auth" "$auth_variant"; then
+    say "Already using $mode mode."
+    return 0
+  fi
+
+  backup_active_files "$mode"
+  atomic_copy "$config_variant" "$config"
+  atomic_copy "$auth_variant" "$auth"
+
+  say "Switched to $mode mode."
+  say "  config <- $config_variant"
+  say "  auth   <- $auth_variant"
+}
+
+stdin_is_tty() {
+  [[ -t 0 ]]
+}
+
+prompt_choice() {
+  local answer
+
+  if stdin_is_tty; then
+    printf 'Which mode are the current active Codex files using?\n' >&2
+    printf '  1) oai - ChatGPT/OAI subscription login\n' >&2
+    printf '  2) api    - API key login\n' >&2
+  fi
+
+  while true; do
+    if stdin_is_tty; then
+      printf 'Choose [1/oai, 2/api]: ' >&2
+    fi
+    if ! IFS= read -r answer; then
+      die "init needs a mode: '$PROGRAM_NAME init api' or '$PROGRAM_NAME init oai'"
+    fi
+    case "$answer" in
+      1 | oai | openai | gpt | plus | chatgpt | subscription | sub)
+        printf 'oai\n'
+        return 0
+        ;;
+      2 | api | apikey | key)
+        printf 'api\n'
+        return 0
+        ;;
+      *)
+        printf 'Please choose oai or api.\n' >&2
+        ;;
+    esac
+  done
+}
+
+confirm_overwrite() {
+  local path="$1"
+  local answer
+
+  [[ -e "$path" ]] || return 0
+
+  if [[ "$FORCE" -eq 1 ]]; then
+    return 0
+  fi
+
+  if ! stdin_is_tty; then
+    die "$path already exists (add --force to overwrite)"
+  fi
+
+  while true; do
+    printf '%s already exists. Overwrite? [y/N]: ' "$path" >&2
+    IFS= read -r answer
+    case "$answer" in
+      y | Y | yes | YES)
+        return 0
+        ;;
+      n | N | no | NO | "")
+        die "aborted"
+        ;;
+      *)
+        printf 'Please answer y or n.\n' >&2
+        ;;
+    esac
+  done
+}
+
+init_command() {
+  local raw_mode="${1:-}"
+  local mode suffix config auth config_variant auth_variant
+
+  if [[ -n "$raw_mode" ]]; then
+    mode="$(normalize_mode "$raw_mode")" || die "init needs a mode: api or oai"
+  else
+    mode="$(prompt_choice)"
+  fi
+
+  suffix="$(preferred_suffix "$mode" "$raw_mode")"
+  config="$(config_file)"
+  auth="$(auth_file)"
+  config_variant="$config.$suffix"
+  auth_variant="$auth.$suffix"
+
+  [[ -d "$CODEX_HOME" ]] || die "Codex home does not exist: $CODEX_HOME"
+  [[ -f "$config" ]] || die "active config does not exist: $config"
+  [[ -f "$auth" ]] || die "active auth does not exist: $auth"
+
+  confirm_overwrite "$config_variant"
+  confirm_overwrite "$auth_variant"
+
+  cp -p "$config" "$config_variant"
+  cp -p "$auth" "$auth_variant"
+
+  say "Saved current active Codex files as $mode mode."
+  say "  $config_variant"
+  say "  $auth_variant"
+}
+
+init_from_args() {
+  local raw_mode=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force)
+        FORCE=1
+        ;;
+      --quiet)
+        QUIET=1
+        ;;
+      "")
+        ;;
+      *)
+        if [[ -z "$raw_mode" ]]; then
+          raw_mode="$1"
+        else
+          die "unexpected init argument '$1'"
+        fi
+        ;;
+    esac
+    shift
+  done
+
+  init_command "$raw_mode"
+}
+
+parse_global_options() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --codex-home)
+        [[ $# -ge 2 ]] || die "--codex-home needs a directory"
+        CODEX_HOME="$(expand_path "$2")"
+        shift 2
+        ;;
+      --codex-home=*)
+        CODEX_HOME="$(expand_path "${1#--codex-home=}")"
+        shift
+        ;;
+      --force)
+        FORCE=1
+        shift
+        ;;
+      --quiet)
+        QUIET=1
+        shift
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      -v | --version)
+        printf '%s %s\n' "$PROGRAM_NAME" "$VERSION"
+        exit 0
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        die "unknown option '$1'"
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  COMMAND_ARGS=("$@")
+}
+
+main() {
+  local command
+
+  parse_global_options "$@"
+  set -- "${COMMAND_ARGS[@]}"
+  command="${1:-status}"
+
+  case "$command" in
+    help)
+      usage
+      ;;
+    status | current)
+      status_command
+      ;;
+    doctor | check)
+      doctor_command
+      ;;
+    init | setup)
+      shift
+      init_from_args "$@"
+      ;;
+    switch | use)
+      shift
+      switch_command "${1:-}"
+      ;;
+    api | oai | openai)
+      switch_command "$command"
+      ;;
+    *)
+      die "unknown command '$command'"
+      ;;
+  esac
+}
+
+main "$@"
