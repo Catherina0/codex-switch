@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+CODEX_HOME="${CODEX_HOME:-"$HOME/.codex"}"
+CONFIG_FILE="$CODEX_HOME/config.toml"
+AUTH_FILE="$CODEX_HOME/auth.json"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  codex-mode status
+  codex-mode switch api|openai
+  codex-mode api
+  codex-mode openai
+  codex-mode init api|openai [--force]
+  codex-mode doctor
+  codex-mode install
+
+Modes:
+  api       Uses config.toml.api and auth.json.api
+  openai   Uses config.toml.openai/auth.json.openai, or .oai files if those exist
+
+Environment:
+  CODEX_HOME   Defaults to ~/.codex
+USAGE
+}
+
+die() {
+  printf 'codex-mode: %s\n' "$*" >&2
+  exit 1
+}
+
+normalize_mode() {
+  case "${1:-}" in
+    api | apikey | key)
+      printf 'api\n'
+      ;;
+    openai | oai | gpt | plus | chatgpt | subscription | sub)
+      printf 'openai\n'
+      ;;
+    *)
+      die "unknown mode '$1' (use api or openai)"
+      ;;
+  esac
+}
+
+preferred_suffix() {
+  case "$1" in
+    api) printf 'api\n' ;;
+    openai) printf 'openai\n' ;;
+    *) die "unknown mode '$1'" ;;
+  esac
+}
+
+suffixes_for_mode() {
+  case "$1" in
+    api)
+      printf 'api\n'
+      ;;
+    openai)
+      printf 'openai\n'
+      printf 'oai\n'
+      ;;
+    *)
+      die "unknown mode '$1'"
+      ;;
+  esac
+}
+
+find_variant() {
+  local base_file="$1"
+  local mode="$2"
+  local suffix
+
+  while IFS= read -r suffix; do
+    if [[ -f "$base_file.$suffix" ]]; then
+      printf '%s.%s\n' "$base_file" "$suffix"
+      return 0
+    fi
+  done < <(suffixes_for_mode "$mode")
+
+  return 1
+}
+
+mode_label_for_suffix() {
+  case "$1" in
+    api) printf 'api\n' ;;
+    openai | oai) printf 'openai\n' ;;
+    *) printf 'unknown\n' ;;
+  esac
+}
+
+matching_active_mode() {
+  local suffix config_variant auth_variant
+
+  for suffix in api openai oai; do
+    config_variant="$CONFIG_FILE.$suffix"
+    auth_variant="$AUTH_FILE.$suffix"
+    if [[ -f "$CONFIG_FILE" && -f "$AUTH_FILE" && -f "$config_variant" && -f "$auth_variant" ]]; then
+      if cmp -s "$CONFIG_FILE" "$config_variant" && cmp -s "$AUTH_FILE" "$auth_variant"; then
+        printf '%s (%s)\n' "$(mode_label_for_suffix "$suffix")" "$suffix"
+        return 0
+      fi
+    fi
+  done
+
+  printf 'unknown\n'
+}
+
+print_variant_state() {
+  local mode="$1"
+  local config_variant auth_variant
+
+  if config_variant="$(find_variant "$CONFIG_FILE" "$mode" 2>/dev/null)"; then
+    printf '  %-6s config: %s\n' "$mode" "$config_variant"
+  else
+    printf '  %-6s config: missing\n' "$mode"
+  fi
+
+  if auth_variant="$(find_variant "$AUTH_FILE" "$mode" 2>/dev/null)"; then
+    printf '  %-6s auth:   %s\n' "$mode" "$auth_variant"
+  else
+    printf '  %-6s auth:   missing\n' "$mode"
+  fi
+}
+
+status() {
+  printf 'Codex home: %s\n' "$CODEX_HOME"
+  printf 'Active mode: %s\n' "$(matching_active_mode)"
+  printf '\nVariants:\n'
+  print_variant_state api
+  print_variant_state openai
+}
+
+doctor() {
+  local ok=0
+
+  [[ -d "$CODEX_HOME" ]] || {
+    printf 'Missing Codex home: %s\n' "$CODEX_HOME" >&2
+    ok=1
+  }
+
+  for mode in api openai; do
+    find_variant "$CONFIG_FILE" "$mode" >/dev/null 2>&1 || {
+      printf 'Missing config variant for %s\n' "$mode" >&2
+      ok=1
+    }
+    find_variant "$AUTH_FILE" "$mode" >/dev/null 2>&1 || {
+      printf 'Missing auth variant for %s\n' "$mode" >&2
+      ok=1
+    }
+  done
+
+  if [[ "$ok" -eq 0 ]]; then
+    printf 'Everything looks ready.\n'
+  else
+    printf '\nRun codex-mode init api or codex-mode init openai after logging in with that mode.\n' >&2
+  fi
+
+  return "$ok"
+}
+
+backup_active() {
+  local target_mode="$1"
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    cp -p "$CONFIG_FILE" "$CONFIG_FILE.backup-$stamp-before-$target_mode"
+  fi
+
+  if [[ -f "$AUTH_FILE" ]]; then
+    cp -p "$AUTH_FILE" "$AUTH_FILE.backup-$stamp-before-$target_mode"
+  fi
+}
+
+atomic_copy() {
+  local source_file="$1"
+  local target_file="$2"
+  local tmp_file
+
+  tmp_file="$target_file.tmp.$$"
+  cp -p "$source_file" "$tmp_file"
+  mv "$tmp_file" "$target_file"
+}
+
+switch_mode() {
+  local mode config_variant auth_variant
+  mode="$(normalize_mode "$1")"
+
+  [[ -d "$CODEX_HOME" ]] || die "Codex home does not exist: $CODEX_HOME"
+
+  config_variant="$(find_variant "$CONFIG_FILE" "$mode")" ||
+    die "missing config variant for $mode under $CODEX_HOME"
+  auth_variant="$(find_variant "$AUTH_FILE" "$mode")" ||
+    die "missing auth variant for $mode under $CODEX_HOME"
+
+  if [[ -f "$CONFIG_FILE" && -f "$AUTH_FILE" ]] &&
+    cmp -s "$CONFIG_FILE" "$config_variant" &&
+    cmp -s "$AUTH_FILE" "$auth_variant"; then
+    printf 'Already using %s mode.\n' "$mode"
+    return 0
+  fi
+
+  backup_active "$mode"
+  atomic_copy "$config_variant" "$CONFIG_FILE"
+  atomic_copy "$auth_variant" "$AUTH_FILE"
+
+  printf 'Switched to %s mode.\n' "$mode"
+  printf '  config <- %s\n' "$config_variant"
+  printf '  auth   <- %s\n' "$auth_variant"
+}
+
+init_mode() {
+  local raw_mode="${1:-}"
+  local mode suffix force="${2:-}"
+  local config_variant auth_variant
+
+  [[ -n "$raw_mode" ]] || die 'init needs a mode: api or openai'
+  mode="$(normalize_mode "$raw_mode")"
+
+  if [[ "$raw_mode" == "oai" ]]; then
+    suffix="oai"
+  else
+    suffix="$(preferred_suffix "$mode")"
+  fi
+
+  [[ -f "$CONFIG_FILE" ]] || die "active config does not exist: $CONFIG_FILE"
+  [[ -f "$AUTH_FILE" ]] || die "active auth does not exist: $AUTH_FILE"
+
+  config_variant="$CONFIG_FILE.$suffix"
+  auth_variant="$AUTH_FILE.$suffix"
+
+  if [[ "$force" != "--force" ]]; then
+    [[ ! -e "$config_variant" ]] || die "$config_variant already exists (add --force to overwrite)"
+    [[ ! -e "$auth_variant" ]] || die "$auth_variant already exists (add --force to overwrite)"
+  fi
+
+  cp -p "$CONFIG_FILE" "$config_variant"
+  cp -p "$AUTH_FILE" "$auth_variant"
+
+  printf 'Saved current active files as %s mode.\n' "$mode"
+  printf '  %s\n' "$config_variant"
+  printf '  %s\n' "$auth_variant"
+}
+
+install_self() {
+  local target_dir target_file source_file
+
+  source_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+  target_dir="$HOME/.local/bin"
+  target_file="$target_dir/codex-mode"
+
+  mkdir -p "$target_dir"
+  ln -sf "$source_file" "$target_file"
+  printf 'Installed symlink: %s -> %s\n' "$target_file" "$source_file"
+
+  case ":$PATH:" in
+    *":$target_dir:"*) ;;
+    *)
+      printf 'Add this to your shell config if codex-mode is not found:\n'
+      printf '  export PATH="$HOME/.local/bin:$PATH"\n'
+      ;;
+  esac
+}
+
+main() {
+  local command="${1:-status}"
+
+  case "$command" in
+    -h | --help | help)
+      usage
+      ;;
+    status)
+      status
+      ;;
+    doctor)
+      doctor
+      ;;
+    switch | use)
+      shift
+      [[ $# -ge 1 ]] || die 'switch needs a mode: api or openai'
+      switch_mode "$1"
+      ;;
+    api | openai | oai)
+      switch_mode "$command"
+      ;;
+    init)
+      shift
+      init_mode "${1:-}" "${2:-}"
+      ;;
+    install)
+      install_self
+      ;;
+    *)
+      die "unknown command '$command'"
+      ;;
+  esac
+}
+
+main "$@"
