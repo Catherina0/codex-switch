@@ -1,5 +1,7 @@
 # codex-switch
 
+[中文说明](README.zh-CN.md)
+
 `codex-switch` is a tiny zero-dependency CLI for switching Codex between:
 
 - API key mode
