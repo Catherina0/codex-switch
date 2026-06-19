@@ -82,6 +82,15 @@ codex-switch api
 codex-switch oai
 ```
 
+After a successful switch, `codex-switch` restarts Codex automatically so the new auth files are loaded.
+
+Skip the restart when needed:
+
+```bash
+codex-switch --no-restart api
+CODEX_SWITCH_RESTART=0 codex-switch oai
+```
+
 Check current status:
 
 ```bash
@@ -145,6 +154,7 @@ codex-switch init api
 codex-switch init oai
 codex-switch switch api
 codex-switch switch oai
+codex-switch --no-restart api
 codex-switch api
 codex-switch oai
 codex-switch doctor
@@ -163,6 +173,7 @@ The test suite covers:
 - interactive initialization
 - non-interactive initialization
 - switching both modes
+- automatic Codex restart after switching
 - timestamped backups
 - `.oai` mode files and `.openai` compatibility files
 - missing mode failure behavior

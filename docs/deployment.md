@@ -15,8 +15,8 @@ Expected outputs:
 
 ```text
 All tests passed.
-dist/codex-switch-0.1.0.tar.gz
-dist/codex-switch-0.1.0.zip
+dist/codex-switch-0.1.1.tar.gz
+dist/codex-switch-0.1.1.zip
 ```
 
 The `.zip` artifact is created only when `zip` is installed.
@@ -70,11 +70,11 @@ CODEX_SWITCH_REPO=owner/codex-switch \
 
 ```bash
 make dist
-gh release create v0.1.0 \
-  dist/codex-switch-0.1.0.tar.gz \
-  dist/codex-switch-0.1.0.zip \
-  --title "codex-switch v0.1.0" \
-  --notes "Initial release: API/OAI mode switching, interactive setup, one-line install, tests."
+gh release create v0.1.1 \
+  dist/codex-switch-0.1.1.tar.gz \
+  dist/codex-switch-0.1.1.zip \
+  --title "codex-switch v0.1.1" \
+  --notes "Adds automatic Codex restart after switching modes."
 ```
 
 If the `.zip` file does not exist, omit it from the release command.

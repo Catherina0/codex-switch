@@ -98,7 +98,7 @@ test_init_switch_and_backups_with_spaced_path() {
   output="$("$BIN" --codex-home "$home_dir" status)"
   assert_contains "$output" "Active mode: oai (oai)"
 
-  "$BIN" --codex-home "$home_dir" api >/dev/null
+  CODEX_SWITCH_RESTART=0 "$BIN" --codex-home "$home_dir" api >/dev/null
   assert_file_content "$home_dir/config.toml" "api-config"
   assert_file_content "$home_dir/auth.json" "api-auth"
   assert_backup_exists "$home_dir" "config.toml" "api"
@@ -133,7 +133,7 @@ test_oai_mode_is_supported() {
   printf 'oai-config\n' > "$home_dir/config.toml.oai"
   printf 'oai-auth\n' > "$home_dir/auth.json.oai"
 
-  "$BIN" --codex-home "$home_dir" oai >/dev/null
+  CODEX_SWITCH_RESTART=0 "$BIN" --codex-home "$home_dir" oai >/dev/null
   assert_file_content "$home_dir/config.toml" "oai-config"
   assert_file_content "$home_dir/auth.json" "oai-auth"
 
@@ -151,7 +151,7 @@ test_openai_alias_files_are_supported() {
   printf 'alias-config\n' > "$home_dir/config.toml.openai"
   printf 'alias-auth\n' > "$home_dir/auth.json.openai"
 
-  "$BIN" --codex-home "$home_dir" oai >/dev/null
+  CODEX_SWITCH_RESTART=0 "$BIN" --codex-home "$home_dir" oai >/dev/null
   assert_file_content "$home_dir/config.toml" "alias-config"
   assert_file_content "$home_dir/auth.json" "alias-auth"
 
@@ -197,6 +197,34 @@ test_env_codex_home_and_tilde_option() {
   "$BIN" --codex-home "~/.codex" status >/dev/null || true
 }
 
+test_switch_restarts_codex_by_default() {
+  local home_dir marker
+  home_dir="$(new_codex_home "restart")"
+  marker="$TMP_ROOT/restart-marker"
+
+  write_active "$home_dir" "api-config" "api-auth"
+  "$BIN" --codex-home "$home_dir" init api >/dev/null
+  write_active "$home_dir" "oai-config" "oai-auth"
+  "$BIN" --codex-home "$home_dir" init oai >/dev/null
+
+  CODEX_SWITCH_RESTART_COMMAND="printf restarted > '$marker'" "$BIN" --codex-home "$home_dir" api >/dev/null
+  assert_file_content "$marker" "restarted"
+}
+
+test_no_restart_option_skips_restart() {
+  local home_dir marker
+  home_dir="$(new_codex_home "no restart")"
+  marker="$TMP_ROOT/no-restart-marker"
+
+  write_active "$home_dir" "api-config" "api-auth"
+  "$BIN" --codex-home "$home_dir" init api >/dev/null
+  write_active "$home_dir" "oai-config" "oai-auth"
+  "$BIN" --codex-home "$home_dir" init oai >/dev/null
+
+  CODEX_SWITCH_RESTART_COMMAND="printf restarted > '$marker'" "$BIN" --no-restart --codex-home "$home_dir" api >/dev/null
+  [[ ! -e "$marker" ]]
+}
+
 run_test "help, version, and syntax" test_help_version_and_syntax
 run_test "init, switch, backups, and paths with spaces" test_init_switch_and_backups_with_spaced_path
 run_test "interactive init and --force after mode" test_interactive_init_from_stdin_and_force_after_mode
@@ -205,6 +233,8 @@ run_test ".openai compatibility files are supported" test_openai_alias_files_are
 run_test "missing saved mode fails without mutating active files" test_missing_saved_mode_fails_without_mutating
 run_test "doctor accepts a ready Codex home" test_doctor_accepts_ready_home
 run_test "CODEX_HOME env and tilde option work" test_env_codex_home_and_tilde_option
+run_test "switch restarts Codex by default" test_switch_restarts_codex_by_default
+run_test "--no-restart skips restart" test_no_restart_option_skips_restart
 
 if [[ "$FAIL_COUNT" -gt 0 ]]; then
   printf '%s test(s) failed\n' "$FAIL_COUNT" >&2

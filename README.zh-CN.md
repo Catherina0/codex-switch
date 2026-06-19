@@ -82,6 +82,15 @@ codex-switch api
 codex-switch oai
 ```
 
+切换成功后，`codex-switch` 会自动重启 Codex，让新的登录文件立即生效。
+
+需要跳过重启时：
+
+```bash
+codex-switch --no-restart api
+CODEX_SWITCH_RESTART=0 codex-switch oai
+```
+
 查看当前状态：
 
 ```bash
@@ -145,6 +154,7 @@ codex-switch init api
 codex-switch init oai
 codex-switch switch api
 codex-switch switch oai
+codex-switch --no-restart api
 codex-switch api
 codex-switch oai
 codex-switch doctor
@@ -163,6 +173,7 @@ make test
 - 交互式初始化
 - 非交互初始化
 - 两种模式的切换
+- 切换后的 Codex 自动重启
 - 带时间戳的备份
 - `.oai` 模式文件和 `.openai` 兼容文件
 - 缺失模式时失败且不修改当前文件

@@ -2,11 +2,12 @@
 set -euo pipefail
 
 readonly PROGRAM_NAME="codex-switch"
-readonly VERSION="0.1.0"
+readonly VERSION="0.1.1"
 
 CODEX_HOME="${CODEX_HOME:-"$HOME/.codex"}"
 FORCE=0
 QUIET=0
+RESTART_CODEX="${CODEX_SWITCH_RESTART:-1}"
 
 usage() {
   cat <<'USAGE'
@@ -23,6 +24,7 @@ Usage:
 Global options:
   --codex-home DIR   Codex config directory. Defaults to $CODEX_HOME or ~/.codex
   --force            Overwrite existing saved mode files during init
+  --no-restart       Do not restart Codex after switching modes
   --quiet            Print less output
   -h, --help         Show help
   -v, --version      Show version
@@ -36,6 +38,7 @@ Examples:
   codex-switch init
   codex-switch api
   codex-switch oai
+  codex-switch --no-restart api
   codex-switch --codex-home /tmp/codex-home status
 USAGE
 }
@@ -280,6 +283,30 @@ atomic_copy() {
   mv "$tmp_file" "$target_file"
 }
 
+restart_codex() {
+  if [[ "$RESTART_CODEX" == "0" || "$RESTART_CODEX" == "false" || "$RESTART_CODEX" == "no" ]]; then
+    say "Codex restart skipped."
+    return 0
+  fi
+
+  say "Restarting Codex..."
+
+  if [[ -n "${CODEX_SWITCH_RESTART_COMMAND:-}" ]]; then
+    eval "$CODEX_SWITCH_RESTART_COMMAND"
+    return 0
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    osascript -e 'tell application "Codex" to quit' >/dev/null 2>&1 || true
+    sleep 1
+    if ! open -a Codex; then
+      warn "switched modes, but could not reopen Codex automatically"
+    fi
+  else
+    warn "automatic Codex restart is only supported on macOS"
+  fi
+}
+
 switch_command() {
   local raw_mode="${1:-}"
   local mode config auth config_variant auth_variant
@@ -309,6 +336,7 @@ switch_command() {
   say "Switched to $mode mode."
   say "  config <- $config_variant"
   say "  auth   <- $auth_variant"
+  restart_codex
 }
 
 stdin_is_tty() {
@@ -450,6 +478,10 @@ parse_global_options() {
         ;;
       --force)
         FORCE=1
+        shift
+        ;;
+      --no-restart)
+        RESTART_CODEX=0
         shift
         ;;
       --quiet)

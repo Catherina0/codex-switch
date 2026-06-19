@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Restart Codex automatically after switching modes.
+- Add `--no-restart` and `CODEX_SWITCH_RESTART=0` opt-outs.
+
 ## 0.1.0
 
 - Add `codex-switch` CLI.
